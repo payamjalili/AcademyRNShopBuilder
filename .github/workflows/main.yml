@@ -1,0 +1,101 @@
+name: Build Android
+
+on:
+  push:
+    branches: master
+  pull_request:
+    branches: master
+
+  workflow_dispatch:
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@master
+        with:
+          repository: payamjalili/AcademyRNShop
+          token: ${{ secrets.MY_PAT }}
+          
+      - uses: actions/checkout@v2
+        with:
+          path: 'build-data'
+    
+      - name: Move current build data
+        run: |
+          cp -r ./build-data/. ./
+          export PROJECT_NAME=`cat project-name.txt`
+          echo $PROJECT_NAME
+         
+      - uses: actions/cache@v2
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+
+      - name: Get npm cache directory
+        id: npm-cache
+        run: |
+          echo "::set-output name=dir::$(npm config get cache)"
+
+      - uses: actions/cache@v2
+        with:
+          path: ${{ steps.npm-cache.outputs.dir }}
+          key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-node-
+
+      - name: Changing package name
+        run: |
+          export DEFAULT_BUNDLE_IDENTIFIER='com.bashgahapp.payam'
+          export DEFAULT_PROJECT_NAME='payam'
+          export PROJECT_NAME=`cat project-name.txt`
+          export PROJECT_APP_NAME=`cat project-app-name.txt`
+          export PROJECT_BUNDLE_IDENTIFIER='com.bashgahapp.'$PROJECT_NAME
+          sed -i 's/'$DEFAULT_BUNDLE_IDENTIFIER'/'$PROJECT_BUNDLE_IDENTIFIER'/g' android/app/src/main/java/com/bashgahapp/payam/MainActivity.java
+          sed -i 's/'$DEFAULT_BUNDLE_IDENTIFIER'/'$PROJECT_BUNDLE_IDENTIFIER'/g' android/app/src/main/java/com/bashgahapp/payam/MainApplication.java
+          sed -i 's/'$DEFAULT_BUNDLE_IDENTIFIER'/'$PROJECT_BUNDLE_IDENTIFIER'/g' android/app/src/main/AndroidManifest.xml
+          sed -i 's/'$DEFAULT_BUNDLE_IDENTIFIER'/'$PROJECT_BUNDLE_IDENTIFIER'/g' android/app/build.gradle
+          sed -i 's/'$DEFAULT_BUNDLE_IDENTIFIER'/'$PROJECT_BUNDLE_IDENTIFIER'/g' android/app/BUCK
+          sed -i 's/'$DEFAULT_BUNDLE_IDENTIFIER'/'$PROJECT_BUNDLE_IDENTIFIER'/g' android/app/google-services.json
+          sed -i 's/'$DEFAULT_PROJECT_NAME'/'$PROJECT_APP_NAME'/g' android/app/src/main/res/values/strings.xml
+          mv android/app/src/main/java/com/bashgahapp/payam android/app/src/main/java/com/bashgahapp/$PROJECT_NAME
+          sed "s:$DEFAULT_PROJECT_NAME:$PROJECT_APP_NAME:g" app.json
+
+      - name: Install node dependencies
+        run: |
+          npm i
+          npx jetify
+
+      - name: Bundle *.apk
+        run: |
+          cd android
+          sudo chmod +x ./gradlew
+          ./gradlew assembleRelease
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v1
+        with:
+          name: Apk
+          path: android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Renaming *.apk
+        run: |
+          export PROJECT_NAME=`cat project-name.txt`
+          cd android/app/build/outputs/apk/release
+          mv app-release.apk $PROJECT_NAME.apk
+          ls
+      - name: Deploy *.apk to Staging server
+        uses: easingthemes/ssh-deploy@main
+        env:
+          SSH_PRIVATE_KEY: ${{secrets.SERVER_SSH_KEY}}
+          ARGS: '-rltgoDzvO'
+          SOURCE: 'android/app/build/outputs/apk/release/'
+          REMOTE_HOST: ${{secrets.SERVER_IP}}
+          REMOTE_USER: ${{secrets.SERVER_USERNAME}}
+          TARGET: '/var/www/html/output'
+          EXCLUDE: 'output.json'
